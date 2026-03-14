@@ -15,30 +15,46 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 MODEL_ID = "arn:aws:bedrock:us-east-1:452031276818:application-inference-profile/8wimphg6jjvj"
-CONFIDENCE_THRESHOLD = 0.7
+CONFIDENCE_THRESHOLD = 0.6
 
 client = boto3.client("bedrock-runtime", region_name="us-east-1")
 
 
+def _detect_image_format(image_bytes: bytes) -> str:
+    """Detect image format from magic bytes."""
+    if image_bytes[:8] == b'\x89PNG\r\n\x1a\n':
+        return "png"
+    if image_bytes[:4] == b'RIFF' and image_bytes[8:12] == b'WEBP':
+        return "webp"
+    if image_bytes[:3] == b'GIF':
+        return "gif"
+    return "jpeg"
+
+
 def _call_nova(prompt: str, image_bytes: Optional[bytes] = None) -> Dict[str, Any]:
-    """Call Nova with optional image, return parsed JSON."""
-    content = [{"text": prompt}]
+    """Call Nova with image FIRST then prompt for best identification accuracy."""
+    content = []
+
+    # ✅ Always put image first — massively improves identification
     if image_bytes:
+        fmt = _detect_image_format(image_bytes)
         content.append({
             "image": {
-                "format": "jpeg",
+                "format": fmt,
                 "source": {"bytes": image_bytes}
             }
         })
 
+    content.append({"text": prompt})
+
     response = client.converse(
         modelId=MODEL_ID,
         messages=[{"role": "user", "content": content}],
-        inferenceConfig={"maxTokens": 1000, "temperature": 0.2},
+        inferenceConfig={"maxTokens": 1200, "temperature": 0.1},
     )
 
     output_text = response["output"]["message"]["content"][0]["text"]
-    logger.info("[Species] Raw response: %s", output_text[:500])
+    logger.info("[Species] Raw response: %s", output_text[:600])
 
     cleaned = output_text.strip().replace("```json", "").replace("```", "").strip()
     match = re.search(r"\{.*\}", cleaned, re.DOTALL)
@@ -67,39 +83,47 @@ def identify_species(
 # FISH
 # ─────────────────────────────────────────────
 def _identify_fish(visual_features: Dict[str, Any], image_bytes: Optional[bytes]) -> Dict[str, Any]:
-    health_obs = visual_features.get("health_observations", [])
+    health_obs   = visual_features.get("health_observations", [])
     features_str = json.dumps(visual_features, indent=2)
 
-    prompt = f"""You are a marine ichthyologist specializing in reef fish identification.
+    prompt = f"""You are a world-class marine ichthyologist. Look at this fish image and identify the exact species.
 
-Visual features extracted from the image:
+Use the image as your PRIMARY source. These visual features were also extracted:
 {features_str}
 
-Health observations: {health_obs}
+CRITICAL identification rules — use the image directly:
+- Vivid BLUE oval body + YELLOW tail fin = Paracanthurus hepatus (Blue Tang / Palette Surgeonfish)
+- Orange body + bright WHITE vertical stripes = Amphiprion ocellaris (Clownfish)
+- Fan-like venomous spines + red/white stripes = Pterois volitans (Lionfish)
+- Flat disc body + long snout + bold stripes = Butterflyfish (Chaetodontidae)
+- Beak-like fused teeth + bright green/blue/pink = Parrotfish (Scaridae)
+- Bright yellow body + long dorsal filament = Moorish Idol (Zanclus cornutus)
+- Elongated body + eel-like = Moray Eel
+- Blue body + BLACK oval spot on side = Paracanthurus hepatus (Blue Tang)
 
-STEP 1: Identify fish species using body shape, color, pattern, and markings.
-STEP 2: Provide ecological information.
-STEP 3: Assess health — describe any fin damage, parasites, lesions, discoloration, or wounds observed.
+DO NOT guess based on text features alone — look at the actual image colors and shape.
 
-Return STRICT JSON only (no markdown):
+Health observations from image: {health_obs}
+
+Return STRICT JSON only (no markdown, no preamble):
 {{
   "species_name": "Genus species",
-  "confidence": 0.85,
-  "common_names": ["name1", "name2"],
-  "description": "2-3 vivid sentences about appearance and biology",
-  "natural_habitat": "specific habitat with depth range and geography",
-  "ecosystem_role": "specific ecological role on the reef",
-  "rarity_level": "common/uncommon/rare with context sentence",
-  "reef_dependency": "high/medium/low with explanation",
+  "confidence": 0.90,
+  "common_names": ["Primary common name", "Alternative name"],
+  "description": "2-3 vivid sentences about this specific species appearance and biology",
+  "natural_habitat": "specific reef zone, depth range, geographic distribution",
+  "ecosystem_role": "specific role — herbivore/carnivore/cleaner, reef impact",
+  "rarity_level": "common/uncommon/rare — with one sentence of context",
+  "reef_dependency": "high/medium/low — explain relationship with coral reefs",
   "health_status": "healthy/stressed/injured/diseased/unknown",
-  "observed_conditions": ["condition1", "condition2"],
-  "health_notes": "Detailed description of any observed health issues — fin damage, parasites like ich (white spots), lesions, wounds, discoloration, or 'No abnormalities observed' if healthy.",
+  "observed_conditions": [],
+  "health_notes": "Describe fin condition, any parasites, lesions, discoloration, wounds visible. Say 'No abnormalities observed' if healthy.",
   "interesting_facts": [
-    "Specific fact 1 about this species",
-    "Specific fact 2 about diet or hunting",
-    "Specific fact 3 about reproduction",
-    "Specific fact 4 about defense or behavior",
-    "Specific fact 5 about conservation status"
+    "Specific surprising fact about this species",
+    "Fact about its diet or feeding behavior",
+    "Fact about reproduction or lifespan",
+    "Fact about defense or unique adaptation",
+    "Fact about conservation status or threats"
   ]
 }}"""
 
@@ -116,53 +140,62 @@ Return STRICT JSON only (no markdown):
 # MARINE (lobsters, crabs, turtles, octopus…)
 # ─────────────────────────────────────────────
 def _identify_marine(visual_features: Dict[str, Any], image_bytes: Optional[bytes]) -> Dict[str, Any]:
-    features_str    = json.dumps(visual_features, indent=2)
-    creature_class  = visual_features.get("creature_class", "unknown")
-    appendages      = visual_features.get("appendages", "")
-    notable         = visual_features.get("notable_features", "")
-    health_obs      = visual_features.get("health_observations", [])
+    features_str   = json.dumps(visual_features, indent=2)
+    creature_class = visual_features.get("creature_class", "unknown")
+    appendages     = visual_features.get("appendages", "")
+    notable        = visual_features.get("notable_features", "")
+    health_obs     = visual_features.get("health_observations", [])
 
-    prompt = f"""You are a marine biologist with deep expertise in ALL ocean creatures — crustaceans, fish, mollusks, echinoderms, cephalopods, marine reptiles, and mammals.
+    prompt = f"""You are a marine biologist with deep expertise in ALL ocean creatures.
 
-Visual analysis from image:
+Look at this image carefully and identify the exact species.
+
+Visual analysis already extracted:
 {features_str}
 
-Creature class detected: {creature_class}
+Creature class: {creature_class}
 Notable features: {notable}
-Appendages/structures: {appendages}
-Health observations from vision analysis: {health_obs}
+Appendages: {appendages}
+Health observations: {health_obs}
 
-STEP 1: Identify this creature to species level. Use ALL visual clues — shell shape, claw structure, antennae, body segments, color, size.
-STEP 2: Provide ecological and biological information.
-STEP 3: HEALTH ASSESSMENT — this is critical. Based on health_observations:
-  - Describe barnacle coverage in detail (location, density, if heavy infestation)
-  - Describe any missing or damaged claws/limbs
-  - Describe any wounds, lesions, or unusual growths
-  - Describe any parasites or shell damage
-  - State whether these conditions are normal (e.g. barnacles on lobsters are common) or concerning
-  - Say 'No abnormalities observed' only if truly nothing is detected
+IDENTIFICATION GUIDE:
+- Large spiny lobster with long antennae = Panulirus argus (Caribbean Spiny Lobster) or Panulirus ornatus
+- Smaller clawed lobster = Homarus americanus (American Lobster)
+- Crab with wide flat shell = likely Portunus or Callinectes
+- Octopus with 8 arms = Octopus vulgaris or similar
+- Sea turtle with flippers = Chelonia mydas (Green) or Caretta caretta (Loggerhead)
+- Starfish = Asterias or Pisaster species
+- Sea urchin with spines = Diadema or Strongylocentrotus
 
-Return STRICT JSON only (no markdown):
+HEALTH ASSESSMENT — look at the image carefully:
+- Barnacles on shell/carapace — describe coverage and density
+- Missing claws or limbs — note which ones
+- Shell damage or cracks
+- Wounds or lesions on body
+- Parasites or unusual growths
+- Whether conditions are normal or concerning
+
+Return STRICT JSON only (no markdown, no preamble):
 {{
   "species_name": "Genus species",
   "confidence": 0.85,
-  "common_names": ["common name 1", "common name 2"],
-  "description": "2-3 vivid sentences about appearance, behavior and biology",
-  "natural_habitat": "specific habitat — depth, geography, substrate type",
-  "ecosystem_role": "specific ecological role — diet, predators, ecosystem impact",
-  "rarity_level": "common/uncommon/rare with context sentence",
-  "reef_dependency": "high/medium/low with explanation",
+  "common_names": ["Primary name", "Alternative name"],
+  "description": "2-3 vivid sentences about appearance, behavior and biology of this specific creature",
+  "natural_habitat": "specific depth, geography, substrate — where exactly this creature lives",
+  "ecosystem_role": "specific role — what it eats, what eats it, ecosystem function",
+  "rarity_level": "common/uncommon/rare — with context sentence",
+  "reef_dependency": "high/medium/low — explain ocean habitat relationship",
   "health_status": "healthy/stressed/injured/parasitized/unknown",
   "observed_conditions": [
-    "Each specific condition as a separate string — e.g. 'Heavy barnacle coverage on carapace', 'Missing left claw', 'Wound on abdomen'"
+    "Each condition as separate string e.g. 'Heavy barnacle coverage on carapace and legs'"
   ],
-  "health_notes": "Detailed paragraph about the creature's health. Describe barnacle coverage (location, density), missing limbs, wounds, parasites, shell damage. Note whether conditions are typical or concerning. Be specific.",
+  "health_notes": "Detailed health paragraph. Describe barnacle coverage location and density, missing limbs, wounds, parasites. State if normal or concerning for this species.",
   "interesting_facts": [
-    "Surprising or specific fact 1",
-    "Specific fact 2 about diet or hunting",
-    "Specific fact 3 about reproduction or lifespan",
-    "Specific fact 4 about defense or unique adaptations",
-    "Specific fact 5 about conservation or human interaction"
+    "Surprising specific fact about this species",
+    "Fact about diet or hunting strategy",
+    "Fact about reproduction or lifespan",
+    "Fact about unique defense or adaptation",
+    "Fact about commercial importance or conservation"
   ]
 }}"""
 
@@ -180,13 +213,13 @@ Return STRICT JSON only (no markdown):
 # CORAL
 # ─────────────────────────────────────────────
 def _identify_coral(visual_features: Dict[str, Any], image_bytes: Optional[bytes]) -> Dict[str, Any]:
-    bleaching_severity  = visual_features.get("bleaching_severity", "none")
-    bleaching_pct       = visual_features.get("bleaching_percentage", 0)
-    stress_signs        = visual_features.get("visual_stress_signs", [])
-    possible_bleaching  = visual_features.get("possible_bleaching", False)
-    features_str        = json.dumps(visual_features, indent=2)
+    bleaching_severity = visual_features.get("bleaching_severity", "none")
+    bleaching_pct      = visual_features.get("bleaching_percentage", 0)
+    stress_signs       = visual_features.get("visual_stress_signs", [])
+    possible_bleaching = visual_features.get("possible_bleaching", False)
+    features_str       = json.dumps(visual_features, indent=2)
 
-    # Derive danger level directly — Nova cannot override
+    # Derive danger level — Nova cannot override
     if bleaching_severity == "severe" or bleaching_pct > 40:
         derived_danger = "critical"
         derived_health = "severe bleaching"
@@ -205,16 +238,16 @@ def _identify_coral(visual_features: Dict[str, Any], image_bytes: Optional[bytes
 
     logger.info("[Species] Coral health=%s danger=%s", derived_health, derived_danger)
 
-    prompt = f"""You are a coral taxonomist and reef ecologist.
+    prompt = f"""You are a coral taxonomist and reef ecologist. Look at this coral image.
 
-Visual features:
+Visual features extracted:
 {features_str}
 
 IMPORTANT — use these EXACT pre-assessed values, do NOT change them:
   coral_health_status = "{derived_health}"
   danger_level        = "{derived_danger}"
 
-STEP 1: Identify coral species (genus and species).
+STEP 1: Identify coral species from the image (genus and species).
 STEP 2: Describe appearance and reef ecological role.
 STEP 3: List most likely bleaching/stress causes.
 STEP 4: Suggest specific conservation and recovery actions.
@@ -231,13 +264,10 @@ Return STRICT JSON only (no markdown):
   "danger_level": "{derived_danger}",
   "possible_bleaching_causes": ["cause1", "cause2", "cause3"],
   "recommended_actions": ["action1", "action2", "action3"],
-  "health_notes": "Describe observed health: bleaching extent, algae overgrowth, tissue damage, disease signs, physical damage.",
+  "health_notes": "Describe observed health: bleaching extent, algae overgrowth, tissue damage, disease signs.",
   "interesting_facts": [
-    "Specific fact 1",
-    "Specific fact 2",
-    "Specific fact 3",
-    "Specific fact 4",
-    "Specific fact 5"
+    "Specific fact 1", "Specific fact 2", "Specific fact 3",
+    "Specific fact 4", "Specific fact 5"
   ],
   "natural_habitat": "specific reef zone, depth, geography",
   "ecosystem_role": "role in broader marine ecosystem",
@@ -250,7 +280,7 @@ Return STRICT JSON only (no markdown):
         logger.error("[Species] Coral ID failed: %s", str(e))
         res = {"species_name": "Unknown Coral", "confidence": 0.0, "common_names": [], "interesting_facts": []}
 
-    # Force derived values — Nova cannot override
+    # Force derived values
     res["coral_health_status"] = derived_health
     res["danger_level"]        = derived_danger
 
@@ -261,15 +291,11 @@ Return STRICT JSON only (no markdown):
 # HELPERS
 # ─────────────────────────────────────────────
 def _finalize(res: Dict[str, Any], analysis_type: str) -> Dict[str, Any]:
-    """Ensure all required fields exist and types are correct."""
-
-    # Confidence
     try:
         res["confidence"] = float(res.get("confidence", 0.0))
     except Exception:
         res["confidence"] = 0.0
 
-    # List fields
     list_fields = [
         "common_names", "possible_bleaching_causes", "recommended_actions",
         "interesting_facts", "observed_conditions", "health_observations",
@@ -279,7 +305,6 @@ def _finalize(res: Dict[str, Any], analysis_type: str) -> Dict[str, Any]:
         if not isinstance(res.get(f), list):
             res[f] = []
 
-    # String fields with defaults
     string_defaults = {
         "species_name": "Unknown",
         "description": "",
@@ -290,7 +315,6 @@ def _finalize(res: Dict[str, Any], analysis_type: str) -> Dict[str, Any]:
         if not res.get(f):
             res[f] = default
 
-    # Low confidence fallback
     if res["confidence"] < CONFIDENCE_THRESHOLD:
         logger.warning("[Species] Low confidence %.2f for %s", res["confidence"], res.get("species_name"))
 

@@ -26,12 +26,25 @@ def _extract_json(text: str) -> Dict[str, Any]:
     return json.loads(match.group(0))
 
 
+def _detect_image_format(image_bytes: bytes) -> str:
+    """Detect image format from magic bytes — fixes PNG/WEBP failures."""
+    if image_bytes[:8] == b'\x89PNG\r\n\x1a\n':
+        return "png"
+    if image_bytes[:4] == b'RIFF' and image_bytes[8:12] == b'WEBP':
+        return "webp"
+    if image_bytes[:3] == b'GIF':
+        return "gif"
+    return "jpeg"  # default
+
+
 def extract_visual_features(image_bytes: bytes, analysis_type: str = "fish") -> Dict[str, Any]:
     logger.info("[Vision] Extracting visual features (type=%s)", analysis_type)
 
+    fmt = _detect_image_format(image_bytes)
+    logger.info("[Vision] Detected image format: %s", fmt)
+
     if analysis_type == "coral":
-        prompt = """
-You are a coral reef visual analyst and marine biologist.
+        prompt = """You are a coral reef visual analyst and marine biologist.
 
 Analyze this coral image VERY carefully. Do not guess.
 
@@ -62,12 +75,10 @@ Return STRICT JSON only (no markdown, no explanation):
   "bleaching_percentage": 0,
   "visual_stress_signs": [],
   "health_observations": []
-}
-"""
+}"""
 
     elif analysis_type == "marine":
-        prompt = """
-You are a marine biologist specializing in ALL ocean creatures — crustaceans, mollusks, echinoderms, cephalopods, marine reptiles, fish, and more.
+        prompt = """You are a marine biologist specializing in ALL ocean creatures — crustaceans, mollusks, echinoderms, cephalopods, marine reptiles, fish, and more.
 
 Analyze every visible detail of this image carefully.
 
@@ -85,7 +96,7 @@ Pay special attention to:
    - Shell damage or deformities
    - Discoloration suggesting disease
    - Any other abnormalities
-   - Write "Appears healthy, no abnormalities observed" if nothing is found
+   - Write "Appears healthy, no abnormalities observed" if nothing found
 
 Return STRICT JSON only (no markdown, no explanation):
 {
@@ -100,21 +111,29 @@ Return STRICT JSON only (no markdown, no explanation):
   "notable_features": "barnacles, spines, antennae, markings, shell texture, any striking features",
   "possible_stress_signs": [],
   "health_observations": [
-    "Each specific health observation as a separate string. Be specific about location and severity."
+    "Each specific health observation as a separate string."
   ]
-}
-"""
+}"""
 
     else:  # fish
-        prompt = """
-You are a marine biologist specializing in fish morphology.
+        prompt = """You are a marine ichthyologist and expert in reef fish identification.
 
-Carefully analyze the fish image and extract visual traits for species identification.
+Look at this fish image carefully and identify the exact species.
 
-Also check for any health issues:
+Key identification rules:
+- Blue oval body + yellow tail = Blue Tang (Paracanthurus hepatus)
+- Orange/white stripes = Clownfish (Amphiprion ocellaris)
+- Venomous fan-like spines + striped = Lionfish (Pterois volitans)
+- Flat disc body + long snout = Butterflyfish
+- Bright parrot-like beak + colorful = Parrotfish
+- Yellow body, black eye stripe = Bannerfish or Moorish Idol
+
+Extract visual traits AND identify species directly from the image.
+
+Also check for health issues:
 - Fin damage or rot
-- Lesions or wounds
-- Parasites (e.g. ich — white spots)
+- Lesions or wounds  
+- Parasites (white spots = ich)
 - Unusual discoloration
 - Bloating or deformities
 
@@ -132,8 +151,7 @@ Return STRICT JSON only (no markdown, no explanation):
   "health_observations": [
     "Each health observation as a separate string, or 'Appears healthy, no abnormalities observed'"
   ]
-}
-"""
+}"""
 
     try:
         response = client.converse(
@@ -142,13 +160,14 @@ Return STRICT JSON only (no markdown, no explanation):
                 {
                     "role": "user",
                     "content": [
-                        {"text": prompt},
+                        # ✅ IMAGE FIRST — Nova identifies better this way
                         {
                             "image": {
-                                "format": "jpeg",
+                                "format": fmt,
                                 "source": {"bytes": image_bytes}
                             }
                         },
+                        {"text": prompt},
                     ],
                 }
             ],
