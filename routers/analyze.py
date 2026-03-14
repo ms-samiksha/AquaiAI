@@ -20,8 +20,7 @@ def _validate_image_bytes(image_bytes: bytes, max_size_mb: int = 10) -> None:
         raise ValueError(f"Image too large: {size_mb:.1f}MB (max {max_size_mb}MB)")
     try:
         img = Image.open(BytesIO(image_bytes))
-        if img.format not in ["JPEG", "PNG", "GIF", "WEBP"]:
-            raise ValueError(f"Unsupported format: {img.format}")
+        img.verify()  # ✅ just verify, don't convert or modify
     except Exception as e:
         raise ValueError(f"Invalid image: {str(e)}")
 

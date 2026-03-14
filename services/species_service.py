@@ -1,9 +1,7 @@
 """
 Species identification service for marine ecosystem intelligence.
-Handles fish, coral, and all marine creatures with health/disease assessment.
 """
 
-import base64
 import json
 import logging
 import re
@@ -15,13 +13,12 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 MODEL_ID = "arn:aws:bedrock:us-east-1:452031276818:application-inference-profile/8wimphg6jjvj"
-CONFIDENCE_THRESHOLD = 0.6
+CONFIDENCE_THRESHOLD = 0.5
 
 client = boto3.client("bedrock-runtime", region_name="us-east-1")
 
 
-def _detect_image_format(image_bytes: bytes) -> str:
-    """Detect image format from magic bytes."""
+def _detect_format(image_bytes: bytes) -> str:
     if image_bytes[:8] == b'\x89PNG\r\n\x1a\n':
         return "png"
     if image_bytes[:4] == b'RIFF' and image_bytes[8:12] == b'WEBP':
@@ -32,19 +29,15 @@ def _detect_image_format(image_bytes: bytes) -> str:
 
 
 def _call_nova(prompt: str, image_bytes: Optional[bytes] = None) -> Dict[str, Any]:
-    """Call Nova with image FIRST then prompt for best identification accuracy."""
     content = []
-
-    # ✅ Always put image first — massively improves identification
     if image_bytes:
-        fmt = _detect_image_format(image_bytes)
+        fmt = _detect_format(image_bytes)
         content.append({
             "image": {
                 "format": fmt,
                 "source": {"bytes": image_bytes}
             }
         })
-
     content.append({"text": prompt})
 
     response = client.converse(
@@ -68,9 +61,7 @@ def identify_species(
     analysis_type: str = "fish",
     image_bytes: Optional[bytes] = None,
 ) -> Dict[str, Any]:
-
     logger.info("[Species] Identifying species (mode=%s)", analysis_type)
-
     if analysis_type == "coral":
         return _identify_coral(visual_features, image_bytes)
     elif analysis_type == "marine":
@@ -86,44 +77,57 @@ def _identify_fish(visual_features: Dict[str, Any], image_bytes: Optional[bytes]
     health_obs   = visual_features.get("health_observations", [])
     features_str = json.dumps(visual_features, indent=2)
 
-    prompt = f"""You are a world-class marine ichthyologist. Look at this fish image and identify the exact species.
+    prompt = f"""You are a world-class marine biologist and fish taxonomist.
 
-Use the image as your PRIMARY source. These visual features were also extracted:
+Look at this fish image. Identify the EXACT species based on what you actually see.
+
+Visual features already extracted by vision model:
 {features_str}
 
-CRITICAL identification rules — use the image directly:
-- Vivid BLUE oval body + YELLOW tail fin = Paracanthurus hepatus (Blue Tang / Palette Surgeonfish)
-- Orange body + bright WHITE vertical stripes = Amphiprion ocellaris (Clownfish)
-- Fan-like venomous spines + red/white stripes = Pterois volitans (Lionfish)
-- Flat disc body + long snout + bold stripes = Butterflyfish (Chaetodontidae)
-- Beak-like fused teeth + bright green/blue/pink = Parrotfish (Scaridae)
-- Bright yellow body + long dorsal filament = Moorish Idol (Zanclus cornutus)
-- Elongated body + eel-like = Moray Eel
-- Blue body + BLACK oval spot on side = Paracanthurus hepatus (Blue Tang)
+Health observations: {health_obs}
 
-DO NOT guess based on text features alone — look at the actual image colors and shape.
+IDENTIFICATION INSTRUCTIONS:
+- Look at the image directly — do NOT force a species if it doesn't match
+- If the fish has red wounds or injuries, factor those into health assessment
+- If the fish looks like a freshwater species (cichlid, tilapia, etc.) say so
+- If you cannot identify confidently, give your best guess with lower confidence
+- NEVER force "Blue Tang" or any species unless the image actually matches
 
-Health observations from image: {health_obs}
+Common species guide (use ONLY if image matches):
+- Vivid blue disc-shaped body + black marking + yellow tail = Blue Tang (Paracanthurus hepatus)
+- Orange/white vertical stripes = Clownfish (Amphiprion ocellaris)  
+- Fan spines + red/white stripes = Lionfish (Pterois volitans)
+- Flat disc + bold black/white stripes + long snout = Butterflyfish
+- Deep-bodied with iridescent scales + beak = Parrotfish
+- Dark body + bright red/pink wound patches = injured fish, identify from body shape
 
-Return STRICT JSON only (no markdown, no preamble):
+HEALTH ASSESSMENT:
+Based on health_observations and what you see in the image:
+- Red patches = likely wound or bacterial infection
+- White spots = ich (parasites)
+- Torn fins = fin rot or injury
+- Bloating = internal infection
+- Be specific about what you observe
+
+Return STRICT JSON only (no markdown):
 {{
   "species_name": "Genus species",
-  "confidence": 0.90,
-  "common_names": ["Primary common name", "Alternative name"],
-  "description": "2-3 vivid sentences about this specific species appearance and biology",
-  "natural_habitat": "specific reef zone, depth range, geographic distribution",
-  "ecosystem_role": "specific role — herbivore/carnivore/cleaner, reef impact",
-  "rarity_level": "common/uncommon/rare — with one sentence of context",
-  "reef_dependency": "high/medium/low — explain relationship with coral reefs",
+  "confidence": 0.85,
+  "common_names": ["Primary name", "Alternative"],
+  "description": "2-3 sentences about THIS species actual appearance and biology",
+  "natural_habitat": "specific habitat, depth, geography",
+  "ecosystem_role": "specific ecological role",
+  "rarity_level": "common/uncommon/rare with context",
+  "reef_dependency": "high/medium/low with explanation",
   "health_status": "healthy/stressed/injured/diseased/unknown",
-  "observed_conditions": [],
-  "health_notes": "Describe fin condition, any parasites, lesions, discoloration, wounds visible. Say 'No abnormalities observed' if healthy.",
+  "observed_conditions": ["each condition separately"],
+  "health_notes": "Detailed health description — red patches, wounds, fin damage, parasites, or 'No abnormalities observed'",
   "interesting_facts": [
-    "Specific surprising fact about this species",
-    "Fact about its diet or feeding behavior",
-    "Fact about reproduction or lifespan",
-    "Fact about defense or unique adaptation",
-    "Fact about conservation status or threats"
+    "Fact 1 specific to this species",
+    "Fact 2 about diet or behavior",
+    "Fact 3 about reproduction",
+    "Fact 4 about defense or adaptation",
+    "Fact 5 about conservation"
   ]
 }}"""
 
@@ -137,7 +141,7 @@ Return STRICT JSON only (no markdown, no preamble):
 
 
 # ─────────────────────────────────────────────
-# MARINE (lobsters, crabs, turtles, octopus…)
+# MARINE
 # ─────────────────────────────────────────────
 def _identify_marine(visual_features: Dict[str, Any], image_bytes: Optional[bytes]) -> Dict[str, Any]:
     features_str   = json.dumps(visual_features, indent=2)
@@ -146,56 +150,53 @@ def _identify_marine(visual_features: Dict[str, Any], image_bytes: Optional[byte
     notable        = visual_features.get("notable_features", "")
     health_obs     = visual_features.get("health_observations", [])
 
-    prompt = f"""You are a marine biologist with deep expertise in ALL ocean creatures.
+    prompt = f"""You are a marine biologist expert in ALL ocean creatures.
 
-Look at this image carefully and identify the exact species.
+Look at this image carefully. Identify the exact species.
 
-Visual analysis already extracted:
+Extracted visual features:
 {features_str}
 
 Creature class: {creature_class}
-Notable features: {notable}
+Notable features: {notable}  
 Appendages: {appendages}
 Health observations: {health_obs}
 
-IDENTIFICATION GUIDE:
-- Large spiny lobster with long antennae = Panulirus argus (Caribbean Spiny Lobster) or Panulirus ornatus
-- Smaller clawed lobster = Homarus americanus (American Lobster)
-- Crab with wide flat shell = likely Portunus or Callinectes
-- Octopus with 8 arms = Octopus vulgaris or similar
-- Sea turtle with flippers = Chelonia mydas (Green) or Caretta caretta (Loggerhead)
-- Starfish = Asterias or Pisaster species
-- Sea urchin with spines = Diadema or Strongylocentrotus
+IDENTIFY based on what you actually see:
+- Spiny lobster with long whip antennae, no claws = Panulirus species
+- Clawed lobster with large crusher claw = Homarus americanus
+- Crab with wide shell and claws = Portunus or Callinectes
+- 8 arms, soft body, color-changing = Octopus
+- Sea turtle with hard shell and flippers = Chelonia or Caretta
+- Spiny spherical = Sea urchin
+- 5 arms radiating from center = Starfish
 
-HEALTH ASSESSMENT — look at the image carefully:
-- Barnacles on shell/carapace — describe coverage and density
-- Missing claws or limbs — note which ones
-- Shell damage or cracks
-- Wounds or lesions on body
-- Parasites or unusual growths
-- Whether conditions are normal or concerning
+HEALTH — describe EVERYTHING you see:
+- Barnacles: where exactly, how dense, covering what %
+- Missing limbs: which ones
+- Shell cracks or damage
+- Wounds or unusual coloration
+- Whether conditions are normal for this species
 
-Return STRICT JSON only (no markdown, no preamble):
+Return STRICT JSON only (no markdown):
 {{
   "species_name": "Genus species",
   "confidence": 0.85,
-  "common_names": ["Primary name", "Alternative name"],
-  "description": "2-3 vivid sentences about appearance, behavior and biology of this specific creature",
-  "natural_habitat": "specific depth, geography, substrate — where exactly this creature lives",
-  "ecosystem_role": "specific role — what it eats, what eats it, ecosystem function",
-  "rarity_level": "common/uncommon/rare — with context sentence",
-  "reef_dependency": "high/medium/low — explain ocean habitat relationship",
+  "common_names": ["Primary name", "Alternative"],
+  "description": "2-3 vivid sentences about this creature",
+  "natural_habitat": "specific depth, geography, substrate",
+  "ecosystem_role": "diet, predators, ecosystem function",
+  "rarity_level": "common/uncommon/rare with context",
+  "reef_dependency": "high/medium/low with explanation",
   "health_status": "healthy/stressed/injured/parasitized/unknown",
-  "observed_conditions": [
-    "Each condition as separate string e.g. 'Heavy barnacle coverage on carapace and legs'"
-  ],
-  "health_notes": "Detailed health paragraph. Describe barnacle coverage location and density, missing limbs, wounds, parasites. State if normal or concerning for this species.",
+  "observed_conditions": ["condition 1", "condition 2"],
+  "health_notes": "Detailed health paragraph — barnacles, missing limbs, wounds. Note if normal or concerning.",
   "interesting_facts": [
-    "Surprising specific fact about this species",
-    "Fact about diet or hunting strategy",
-    "Fact about reproduction or lifespan",
-    "Fact about unique defense or adaptation",
-    "Fact about commercial importance or conservation"
+    "Surprising fact 1",
+    "Diet or hunting fact",
+    "Reproduction or lifespan fact",
+    "Defense or adaptation fact",
+    "Conservation or human interaction fact"
   ]
 }}"""
 
@@ -219,7 +220,7 @@ def _identify_coral(visual_features: Dict[str, Any], image_bytes: Optional[bytes
     possible_bleaching = visual_features.get("possible_bleaching", False)
     features_str       = json.dumps(visual_features, indent=2)
 
-    # Derive danger level — Nova cannot override
+    # Derive danger level — locked, Nova cannot change
     if bleaching_severity == "severe" or bleaching_pct > 40:
         derived_danger = "critical"
         derived_health = "severe bleaching"
@@ -236,41 +237,36 @@ def _identify_coral(visual_features: Dict[str, Any], image_bytes: Optional[bytes
         derived_danger = "healthy"
         derived_health = "healthy"
 
-    logger.info("[Species] Coral health=%s danger=%s", derived_health, derived_danger)
+    logger.info("[Species] Coral health=%s danger=%s (severity=%s pct=%s)",
+                derived_health, derived_danger, bleaching_severity, bleaching_pct)
 
-    prompt = f"""You are a coral taxonomist and reef ecologist. Look at this coral image.
+    prompt = f"""You are a coral taxonomist. Look at this coral image and identify the species.
 
-Visual features extracted:
+Visual features:
 {features_str}
 
-IMPORTANT — use these EXACT pre-assessed values, do NOT change them:
+PRE-ASSESSED health values — use EXACTLY as given, do NOT change:
   coral_health_status = "{derived_health}"
-  danger_level        = "{derived_danger}"
+  danger_level = "{derived_danger}"
 
-STEP 1: Identify coral species from the image (genus and species).
-STEP 2: Describe appearance and reef ecological role.
-STEP 3: List most likely bleaching/stress causes.
-STEP 4: Suggest specific conservation and recovery actions.
-STEP 5: Add interesting ecological facts.
+Identify the coral species from what you see.
+Provide reef role, bleaching causes, recovery actions, and facts.
 
 Return STRICT JSON only (no markdown):
 {{
   "species_name": "Genus species",
   "confidence": 0.80,
   "common_names": ["name1", "name2"],
-  "description": "2-3 vivid sentences about coral appearance and biology",
-  "reef_role": "specific ecological role on the reef",
+  "description": "2-3 vivid sentences about this coral",
+  "reef_role": "specific ecological role",
   "coral_health_status": "{derived_health}",
   "danger_level": "{derived_danger}",
   "possible_bleaching_causes": ["cause1", "cause2", "cause3"],
   "recommended_actions": ["action1", "action2", "action3"],
-  "health_notes": "Describe observed health: bleaching extent, algae overgrowth, tissue damage, disease signs.",
-  "interesting_facts": [
-    "Specific fact 1", "Specific fact 2", "Specific fact 3",
-    "Specific fact 4", "Specific fact 5"
-  ],
-  "natural_habitat": "specific reef zone, depth, geography",
-  "ecosystem_role": "role in broader marine ecosystem",
+  "health_notes": "Describe bleaching extent, algae, tissue damage, disease signs visible in image.",
+  "interesting_facts": ["fact1", "fact2", "fact3", "fact4", "fact5"],
+  "natural_habitat": "reef zone, depth, geography",
+  "ecosystem_role": "role in marine ecosystem",
   "rarity_level": "common/uncommon/rare"
 }}"""
 
@@ -278,9 +274,10 @@ Return STRICT JSON only (no markdown):
         res = _call_nova(prompt, image_bytes)
     except Exception as e:
         logger.error("[Species] Coral ID failed: %s", str(e))
-        res = {"species_name": "Unknown Coral", "confidence": 0.0, "common_names": [], "interesting_facts": []}
+        res = {"species_name": "Unknown Coral", "confidence": 0.0,
+               "common_names": [], "interesting_facts": []}
 
-    # Force derived values
+    # Force — Nova cannot override these
     res["coral_health_status"] = derived_health
     res["danger_level"]        = derived_danger
 
@@ -316,41 +313,26 @@ def _finalize(res: Dict[str, Any], analysis_type: str) -> Dict[str, Any]:
             res[f] = default
 
     if res["confidence"] < CONFIDENCE_THRESHOLD:
-        logger.warning("[Species] Low confidence %.2f for %s", res["confidence"], res.get("species_name"))
-
+        logger.warning("[Species] Low confidence %.2f for %s",
+                       res["confidence"], res.get("species_name"))
     return res
 
 
 def _fish_fallback() -> Dict[str, Any]:
     return {
-        "species_name": "Unknown Fish",
-        "confidence": 0.0,
-        "common_names": [],
-        "description": "Unable to identify species.",
-        "natural_habitat": "unknown",
-        "ecosystem_role": "unknown",
-        "rarity_level": "unknown",
-        "reef_dependency": "unknown",
-        "health_status": "unknown",
-        "observed_conditions": [],
-        "health_notes": "",
+        "species_name": "Unknown Fish", "confidence": 0.0, "common_names": [],
+        "description": "Unable to identify species.", "natural_habitat": "unknown",
+        "ecosystem_role": "unknown", "rarity_level": "unknown", "reef_dependency": "unknown",
+        "health_status": "unknown", "observed_conditions": [], "health_notes": "",
         "interesting_facts": [],
     }
 
 
 def _marine_fallback() -> Dict[str, Any]:
     return {
-        "species_name": "Unknown Marine Creature",
-        "confidence": 0.0,
-        "common_names": [],
-        "description": "Unable to identify species.",
-        "natural_habitat": "unknown",
-        "ecosystem_role": "unknown",
-        "rarity_level": "unknown",
-        "reef_dependency": "unknown",
-        "health_status": "unknown",
-        "observed_conditions": [],
-        "health_notes": "",
-        "interesting_facts": [],
-        "analysis_type": "marine",
+        "species_name": "Unknown Marine Creature", "confidence": 0.0, "common_names": [],
+        "description": "Unable to identify species.", "natural_habitat": "unknown",
+        "ecosystem_role": "unknown", "rarity_level": "unknown", "reef_dependency": "unknown",
+        "health_status": "unknown", "observed_conditions": [], "health_notes": "",
+        "interesting_facts": [], "analysis_type": "marine",
     }
