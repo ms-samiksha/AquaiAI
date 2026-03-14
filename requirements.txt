@@ -14,8 +14,4 @@ python-dotenv>=1.0.0
 pydantic>=2.0.0
 requests>=2.31.0
 httpx>=0.25.0
-```
-
-Then also add a **`runtime.txt`** file in your project root to force Python 3.11 (much more stable for all these packages):
-```
 3.11.8
