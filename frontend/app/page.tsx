@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import UploadCard from '@/components/UploadCard'
 import SearchCard from '@/components/SearchCard'
 
@@ -16,7 +16,7 @@ const PARTICLES = Array.from({ length: 30 }, (_, i) => ({
 const TYPEWRITER_TEXTS = [
   'Identify marine species instantly.',
   'Assess coral reef health with AI.',
-  'Explore the ocean\'s biodiversity.',
+  "Explore the ocean's biodiversity.",
   'Powered by Amazon Nova & AWS.',
 ]
 
@@ -118,7 +118,6 @@ export default function HomePage() {
                 background: 'linear-gradient(135deg, #ffffff 0%, #67e8f9 50%, #0891b2 100%)',
                 WebkitBackgroundClip: 'text',
                 WebkitTextFillColor: 'transparent',
-                textShadow: 'none',
                 filter: 'drop-shadow(0 0 30px rgba(6,182,212,0.4))',
               }}>
               AquaAI
@@ -138,12 +137,13 @@ export default function HomePage() {
         <div className="flex items-center justify-center gap-8 mt-6 pt-6 border-t border-white/5">
           {[
             { value: '10K+', label: 'Species Database' },
-            { value: '95%', label: 'Avg Accuracy' },
-            { value: '<3s', label: 'Analysis Time' },
-            { value: 'Live', label: 'AWS Bedrock' },
+            { value: '95%',  label: 'Avg Accuracy'    },
+            { value: '<3s',  label: 'Analysis Time'   },
+            { value: 'Live', label: 'AWS Bedrock'     },
           ].map(stat => (
             <div key={stat.label} className="text-center">
-              <div className="text-xl font-black text-cyan-300" style={{ fontFamily: "'Orbitron', monospace" }}>
+              <div className="text-xl font-black text-cyan-300"
+                style={{ fontFamily: "'Orbitron', monospace" }}>
                 {stat.value}
               </div>
               <div className="text-xs text-white/30 font-mono mt-0.5">{stat.label}</div>
@@ -174,8 +174,7 @@ export default function HomePage() {
                 style={{
                   color: activeTab === tab.key ? '#67e8f9' : 'rgba(255,255,255,0.3)',
                   background: activeTab === tab.key ? 'rgba(6,182,212,0.05)' : 'transparent',
-                }}
-              >
+                }}>
                 <span>{tab.icon}</span>
                 <span className="tracking-wider uppercase text-xs">{tab.label}</span>
                 {activeTab === tab.key && (
@@ -197,15 +196,14 @@ export default function HomePage() {
         </p>
       </div>
 
-      {/* Google Fonts + animation keyframes */}
       <style jsx global>{`
         @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&family=JetBrains+Mono:wght@400;500&display=swap');
 
         @keyframes floatParticle {
           0%, 100% { opacity: 0; transform: translateY(0px) scale(1); }
-          20% { opacity: 0.6; }
-          50% { opacity: 0.3; transform: translateY(-40px) scale(1.2); }
-          80% { opacity: 0.5; }
+          20%       { opacity: 0.6; }
+          50%       { opacity: 0.3; transform: translateY(-40px) scale(1.2); }
+          80%       { opacity: 0.5; }
         }
       `}</style>
     </main>
